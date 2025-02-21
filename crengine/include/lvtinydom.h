@@ -25,6 +25,7 @@
 #ifndef __LV_TINYDOM_H_INCLUDED__
 #define __LV_TINYDOM_H_INCLUDED__
 
+#include "lvarray.h"
 #include "lvtypes.h"
 #include "lvplatform.h"
 #include "lvmemman.h"
@@ -2547,6 +2548,12 @@ private:
     ldomXRangeList _selections;
     lUInt32 _doc_rendering_hash;
 
+    // source node -> target id
+    LVHashTable<ldomNode *, lString32> _footnote_sources;
+    // anchor id -> pair[target node, extended footnote range]
+    LVHashTable<lString32, LVPair<ldomNode*, ldomXRange>> _footnote_targets;
+    ldomNodeCallback * _footnote_finder;
+
     // Support for partial rerendering
     bool _rerendering_delayed; // when render props changed, but no rerendering yet (can be reset by frontend once dealt with)
     bool _partial_rerendering_enabled; // toggable by frontend
@@ -2716,6 +2723,56 @@ public:
     int getScreenHeight() { return _screen_height; }
     /// returns screen width info
     int getScreenWidth() { return _screen_width; }
+#endif
+#if BUILD_LITE!=1
+    /// set callback to detect and declare footnotes
+    void setFootnoteFinder(ldomNodeCallback *cb) {
+        _footnote_finder = cb;
+        _footnote_targets.clear();
+        _footnote_sources.clear();
+    }
+    lString32Collection getFootnoteBlockIds(ldomNode * blockNode) {
+        lString32Collection out_ids;
+        decltype(_footnote_targets)::iterator it = _footnote_targets.forwardIterator();
+        decltype(_footnote_targets)::pair* pair;
+        while ( (pair = it.next()) ) {
+            // This doesn't work because in the end body contains everything...
+            //  || ldomXRange(blockNode, true).isInside(ldomXPointerEx(pair->value.first(), 0))
+            if ( pair->value.first() == blockNode || pair->value.second().isInside(ldomXPointerEx(blockNode, 0)) ) {
+                out_ids.add(pair->key);
+            }
+        }
+        return out_ids;
+    }
+    void addFootnoteTarget(const lString32 &id, ldomNode *node, ldomXRange extendedRange) {
+        // FIXME rephrase, copied from lvpagesplitter
+        //
+        // If the one we found is already actual, something is wrong: this may
+        // happen with buggy books with duplicated id= (ie. Wikipedia EPUBs...).
+        // LVPageSplitter expects a footnote to be a single chunk/slice of the
+        // document, so we can't accumulate lines from different places: override
+        // its content. (This is consistent with the way crengine handle id= when
+        // building the DOM: later ones override ealier ones).
+        _footnote_targets.set(id, LVPair(node, extendedRange));
+        if ( ! extendedRange.isNull() && ( ldomXRange(node, true).getEnd().compare( extendedRange.getStart() ) >= 0 ) ) {
+            printf("XABR footnote ranges not contiguous %s\n", LCSTR(id));
+        }
+    }
+    void addFootnoteSource(ldomNode *node, const lString32 &id) {
+        if (node == NULL || node->isNull())
+            return;
+        _footnote_sources.set(node, id);
+    }
+    lString32 getFootnoteLinkId(ldomNode *node) {
+        while (node && ! node->isNull()) {
+            lString32 id = _footnote_sources.get(node);
+            if ( ! id.empty() ) {
+                return id;
+            }
+            node = node->getParentNode();
+        }
+        return lString32();
+    }
 #endif
     /// saves document contents as XML to stream with specified encoding
     bool saveToStream( LVStreamRef stream, const char * codepage, bool treeLayout=false );

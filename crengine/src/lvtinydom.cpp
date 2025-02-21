@@ -19,6 +19,7 @@
 // Users of this library can request the old behaviour by setting
 // gDOMVersionRequested to an older version to request the old (possibly
 // buggy) behaviour.
+#include <type_traits>
 #define DOM_VERSION_CURRENT 20240114
 
 // Also defined in include/lvtinydom.h
@@ -3926,6 +3927,8 @@ ldomDocument::ldomDocument()
 , _toc_from_cache_valid(false)
 , _warnings_seen_bitmap(0)
 , _doc_rendering_hash(0)
+, _footnote_sources(32)
+, _footnote_targets(32)
 , _rerendering_delayed(false)
 , _partial_rerendering_enabled(false)
 , _partial_rerenderings_count(0)
@@ -3978,6 +3981,8 @@ ldomDocument::ldomDocument( ldomDocument & doc )
 , _screen_height(doc._screen_height)
 , _screen_width(doc._screen_width)
 , _rerendering_delayed(false)
+, _footnote_sources(32)
+, _footnote_targets(32)
 , _partial_rerendering_enabled(false)
 , _partial_rerenderings_count(0)
 , _partial_rerendering_fake_node_style_hash(0)
@@ -5524,6 +5529,9 @@ bool ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback,
 //        CRLog::trace("reusing existing format data...");
 //    }
 
+    if (_footnote_finder != nullptr) {
+        ldomXRange(getRootNode(), true).forEach(_footnote_finder);
+    }
     if ( !_rendered ) {
         // We have loaded the document and applied styles: drop this cache
         _styleSheetCache.clear();
@@ -5617,6 +5625,7 @@ bool ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback,
         CRLog::trace("Init node styles...");
         applyDocumentStyleSheet();
         getRootNode()->initNodeStyleRecursive( callback );
+
         _styleSheetCache.clear();
         CRLog::trace("Restoring stylesheet...");
         _stylesheet.pop();

@@ -4814,6 +4814,7 @@ int pagebreakhelper(ldomNode *enode,int width)
 int  renderBlockElementLegacy( LVRendPageContext & context, ldomNode * enode, int x, int y, int width, int usable_right_overflow );
 void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int width, lUInt32 flags );
 
+
 // Legacy/original CRE block rendering
 int renderBlockElementLegacy( LVRendPageContext & context, ldomNode * enode, int x, int y, int width, int usable_right_overflow )
 {
@@ -7281,18 +7282,17 @@ void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int 
     lString32Collection footnoteIds;
     // Allow displaying footnote content at the bottom of all pages that contain a link
     // to it, when -cr-hint: footnote-inpage is set on the footnote block container.
-    if ( STYLE_HAS_CR_HINT(style, FOOTNOTE_INPAGE) &&
-                enode->getDocument()->getDocFlag(DOC_FLAG_ENABLE_FOOTNOTES)) {
-        enode->getAllInnerAttributeValues(attr_id, footnoteIds);
-        if ( footnoteIds.length() > 0 )
-            isFootNoteBody = true;
+    if ( enode->getDocument()->getDocFlag(DOC_FLAG_ENABLE_FOOTNOTES) ) {
+        if (STYLE_HAS_CR_HINT(style, FOOTNOTE_INPAGE)) {
+            footnoteIds = enode->getDocument()->getFootnoteBlockIds(enode);
+            if ( footnoteIds.length() > 0 ) {
+                isFootNoteBody = true;
+            }
+        }
         // Notes:
         // enterFootNote() takes care of not creating a new footnote if we are already
         // inside a footnotebody (in case of nested "-cr-hint: footnote-inpage"), which
         // should keep the state sane.
-        // If feels that if there are duplicated id= in the document, and they are
-        // involved in footnotes links and targets, things can get messy... No specific
-        // attention is currently given to this situation.
     }
     // For fb2 documents. Description of the <body> element from FictionBook2.2.xsd:
     //   Main content of the book, multiple bodies are used for additional
@@ -10654,6 +10654,13 @@ void setNodeStyle( ldomNode * enode, css_style_ref_t parent_style, LVFontRef par
         // Avoid CSS selectors (in our user-agent stylesheet) flagged as presentational hints
         // (so, depending on HTML attributes in the document) from being applied.
         pstyle->cr_hint.value |= CSS_CR_HINT_NO_PRESENTATIONAL_CSS;
+    }
+
+    if ( enode->getDocument()->getDocFlag(DOC_FLAG_ENABLE_FOOTNOTES) && ! STYLE_HAS_CR_HINT(parent_style, FOOTNOTE_IGNORE)) {
+        lString32Collection footnoteIds = enode->getDocument()->getFootnoteBlockIds(enode);
+        if (footnoteIds.length() > 0 ) {
+            pstyle->cr_hint.value |= CSS_CR_HINT_INSIDE_FOOTNOTE_INPAGE;
+        }
     }
 
     // display before stylesheet is applied (for fallback below if legacy mode)

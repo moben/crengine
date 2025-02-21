@@ -444,13 +444,16 @@ class LVRendPageContext
             if ( actual ) {
                 // We are going to add lines
                 if ( ref.get()->isActual() ) {
+                    // FIXME not a problem anymore, now handled by initial footnote collection
+                    //       maybe mention this here specifically
+                    //
                     // If the one we found is already actual, something is wrong: this may
                     // happen with buggy books with duplicated id= (ie. Wikipedia EPUBs...).
                     // LVPageSplitter expects a footnote to be a single chunk/slice of the
                     // document, so we can't accumulate lines from different places: override
                     // its content. (This is consistent with the way crengine handle id= when
                     // building the DOM: later ones override ealier ones).
-                    ref.get()->clear();
+                    // ref.get()->clear();
                 }
                 // Make a non-actual (which may be a proxy or not) actual
                 ref.get()->setIsActual(true);
@@ -475,7 +478,9 @@ class LVRendPageContext
                 found = n;
                 // As above, see comments there.
                 if ( ref.get()->isActual() ) {
-                    ref.get()->clear();
+                    // FIXME Also see above
+                    //
+                    // ref.get()->clear();
                 }
                 ref.get()->setIsActual(true);
                 break;
