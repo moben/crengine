@@ -11,6 +11,7 @@
 
 *******************************************************/
 
+#include <climits>
 #include <stdlib.h>
 #include <string.h>
 #include "../include/lvtextfm.h"
@@ -4814,6 +4815,272 @@ int pagebreakhelper(ldomNode *enode,int width)
 int  renderBlockElementLegacy( LVRendPageContext & context, ldomNode * enode, int x, int y, int width, int usable_right_overflow );
 void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int width, lUInt32 flags );
 
+
+
+
+
+
+static bool _isLinkToFootnote(/*const*/ ldomNode *enode,
+            const int flags, const int maxTextSize, lString32 &reason,
+            lString32 &extendedStopReason, ldomXRange &extendedRange)
+{
+
+    ldomDocument * doc = enode->getDocument();
+    const ldomXPointerEx targetXP = ldomXPointerEx(enode, 0);
+    ldomNode *targetNode = enode;
+
+    // target_xpointer might be "#_doc_fragment_0_ References", but we may also need
+    // to use its DOM xpath equivalent: /body/DocFragment/body/div/div[5]/span.0
+    const lString32 targetXpath = ldomXPointer(targetNode, 0).toString();
+
+
+    bool likelyFootnote = false;
+    if (flags & 0x0001) {
+        likelyFootnote = true;
+    }
+    
+
+    // Try to extend footnote
+    if (flags & 0x4000) {
+        // With not well formatted books, the target node might just be
+        // the first line or paragraph among multiple paragraphs that
+        // make up this footnote complete text.
+        // We try to gather as much paragraphs (final nodes) after the
+        // linked one, and stop when we meet:
+        //   - a new <DocFragment> or <body>, or any of <h1>...<h6>
+        //   - (before) a node with page-break-before: always/left/right
+        //   - (after) a node with page-break-after: always/left/right
+        //   - a node with an id= attribute, which may be the start of
+        //     another footnote (calibre additionally verifies that
+        //     the new id= found is actually a referenced target, that
+        //     there is somewhere in the book a <a href="#thatId"> ;
+        //     we can't do that quickly, so we don't).
+        //
+        // We start looking at elements after targetXP "final" parent.
+        bool do_extend = true;
+        ldomXPointerEx extendedStart;
+        ldomXPointerEx curPos;
+        ldomNode * firstFinalNode = targetXP.getFinalNode();
+        if (firstFinalNode && !firstFinalNode->isNull()) {
+            // The target is an inline element, and we got its containing
+            // final block.
+            extendedStart = ldomXPointerEx(firstFinalNode, 0);
+            curPos = extendedStart; // copy
+            // We can't just go looking at next final nodes, there
+            // may be block containers that have page-break styles
+            // or an ID= and are not part of any final node.
+            // We need to start inspecting from the node just after
+            // this firstFinalNode.
+            do_extend = curPos.nextOuterElement();
+            // if no next elements, this was the last final node
+            // in the book, so nothing to find further
+        }
+        else {
+            // The target is an empty element not rendered (so not part
+            // of any final node), and there is a final node after it.
+            // Or it is an outer block that may contain a final node, in
+            // which case we assume it's a proper container of 1 or more
+            // final nodes that fully represent the footnote content,
+            // and we won't extend it further.
+            curPos = targetXP;
+            ldomXPointerEx endPos = curPos; // copy
+            while ( endPos.lastChild() ) {} // get last grand children
+            bool has_final_child = false;
+            while ( curPos.nextElement() && curPos.compare(endPos) <= 0 ) {
+                if ( curPos.isFinalNode() ) {
+                    has_final_child = true;
+                    extendedStopReason = "contains 1 or more final nodes, trusting container";
+                    do_extend = false;
+                    // We could go on extending from this final node if we
+                    // decide to not trust such containers to be proper.
+                    // firstFinalNode = curNode;
+                    break;
+                }
+            }
+            if (!has_final_child) {
+                // We will not inspect the first final node we see after
+                // our target node: it's probably the footnote content
+                extendedStart = targetXP; // start range from original targer anyway
+                curPos = targetXP;
+                do_extend = false;
+                if ( curPos.nextOuterElement() ) { // skip the node we just inspected
+                    do {
+                        if ( curPos.isFinalNode() ) {
+                            // This one is our first final node, step to the
+                            // next one if there is one to go on with
+                            do_extend = curPos.nextOuterElement();
+                            break;
+                        }
+                    }
+                    while ( curPos.nextElement() );
+                }
+            }
+        }
+
+        if (do_extend) {
+            // Check all coming elements until we meet one that can't
+            // be part of current footnote: its final container too
+            // can't be part of current footnote
+            lUInt16 el_DocFragment = doc->getElementNameIndex("DocFragment");
+            lUInt16 el_body = doc->getElementNameIndex("body");
+            lUInt16 el_h1 = doc->getElementNameIndex("h1");
+            lUInt16 el_h6 = doc->getElementNameIndex("h6");
+            lUInt16 el_a = doc->getElementNameIndex("a");
+            ldomNode * goodFinalNode = NULL;
+            ldomNode * curFinalNode = NULL;
+            ldomXPointerEx notAfter;
+            lString32 extStopReason;
+            extStopReason = "End of document met";
+            // printf("[start: %s\n", UnicodeToLocal(curPos.toString()).c_str());
+            while (true) {
+                ldomNode * newFinalNode = curPos.getFinalNode();
+                if (newFinalNode != curFinalNode) {
+                    // New final node. We didn't stop in the previous finalNode,
+                    // so it is fully usable to extend our footnote to include it.
+                    if (curFinalNode && !curFinalNode->isNull())
+                        goodFinalNode = curFinalNode;
+                    curFinalNode = newFinalNode;
+                    // printf("new final node\n");
+                }
+                ldomNode * node = curPos.getNode();
+                lUInt16 nodeId = node->getNodeId();
+                // We should stop on specific occasions:
+                // A footnote can not span <body> or <DocFragment>
+                if ( nodeId == el_body || nodeId == el_DocFragment ) {
+                    extStopReason = "end of document fragment met";
+                    break;
+                }
+                // A footnote can not span headings
+                if ( nodeId >= el_h1 && nodeId <= el_h6 ) {
+                    extStopReason = "H1..H6 met";
+                    break;
+                }
+                // A footnote can not span page breaks (set with CSS properties)
+                css_style_ref_t style = node->getStyle();
+                css_page_break_t pb_before = style->page_break_before;
+                css_page_break_t pb_after = style->page_break_after;
+                if ( pb_before == css_pb_always || pb_before == css_pb_left || pb_before == css_pb_right ) {
+                    extStopReason = "page-break-before met";
+                    break;
+                }
+                if ( pb_after == css_pb_always || pb_after == css_pb_left || pb_after == css_pb_right ) {
+                    ldomXPointerEx tmpPos = curPos;
+                    // printf("[pbafter at %s\n", UnicodeToLocal(notAfter.toString()).c_str());
+                    if ( tmpPos.nextOuterElement() ) {
+                        notAfter = tmpPos;
+                        // printf("[notAfter %s\n", UnicodeToLocal(notAfter.toString()).c_str());
+                    }
+                }
+                // When we meet another final block containing a node with an ID= attribute,
+                // it's probably another footnote.
+                // (In the first final block, it's possible to have multiple nodes with
+                // different ID, which could mean there are multiple terms or synonyms...)
+                lString32 id = node->getAttributeValue("id");
+                if ( !id.empty() ) {
+                    // printf("id=%s\n", UnicodeToLocal(id).c_str());
+                    extStopReason = "node with 'id=' attr met";
+                    break;
+                }
+                else if ( nodeId == el_a ) {
+                    // With <a>, crengine may use name= as its id=, so do as well.
+                    lString32 name = node->getAttributeValue("name");
+                    if ( !name.empty() ) {
+                        extStopReason = "node A with 'name=' attr met";
+                        break;
+                    }
+                }
+                // Done checking
+                if ( !curPos.nextElement() ) {
+                    extStopReason = "end of document met";
+                    break;
+                }
+                // printf("[...: %s\n", UnicodeToLocal(curPos.toString()).c_str());
+                if ( !notAfter.isNull() && curPos.compare(notAfter) >= 0 ) {
+                    extStopReason = "page-break-after met";
+                    if ( curFinalNode && !curFinalNode->isNull() )
+                        goodFinalNode = curFinalNode;
+                    break;
+                }
+            } // end of while (true)
+            extendedStopReason = extStopReason;
+            if ( goodFinalNode && !goodFinalNode->isNull() ) {
+                // printf("GOOD final node\n");
+                ldomXPointerEx extendedEnd = ldomXPointerEx(goodFinalNode, 0);
+                extendedEnd.lastInnerNode(true); // We may miss a trailing image
+                extendedRange = ldomXRange(extendedStart, extendedEnd);
+            }
+            // If we'd get multiple <LI> in multiple final nodes, we'll
+            // be requesting the HTML from the common parent, and if it
+            // is a <OL>, we'll start numbering the <LI> from "1", which
+            // may not be the original numbering in the document.
+            // Howerver, this should not happen with documents using <LI id=...>
+            // as the container for each footnote (like Wikipedia EPUBs), as
+            // the ID= check will then prevent us from including multiple <LI>
+            // in our extended range: the root node will be the <LI>, that we
+            // will mask with CSS "body > li { list-style-type: none; }".
+        }
+    }
+
+    // Target text must not be empty - and (if flags & 0x8000) must be less
+    // than the provided maxTextSize
+    int size = 0;
+    int hasContent = false;
+    ldomXPointerEx curText;
+    ldomXPointerEx endText;
+    if ( !extendedRange.isNull() ) {
+        curText = extendedRange.getStart();
+        endText = extendedRange.getEnd();
+    }
+    else {
+        ldomNode * finalNode = targetXP.getFinalNode();
+        if ( finalNode && !finalNode->isNull() )
+            curText = ldomXPointerEx(finalNode, 0);
+        else
+            curText = targetXP;
+        endText = curText; // copy
+        endText.lastInnerTextNode();
+    }
+    // Walk all text nodes till endText
+    while (curText.nextText() && curText.compare(endText) <= 0) {
+        lString32 nodeText = curText.getText();
+        size += nodeText.length();
+        if ( !hasContent ) {
+            hasContent = !(nodeText.trim().empty());
+        }
+        if (flags & 0x8000) { // Target text must be less than the provided maxTextSize
+            if (size > maxTextSize) {
+                reason = "target text is too large";
+                return false;
+                // If we checked the extended one, should we try again
+                // on the non-extended one?
+            }
+        }
+        else if ( hasContent ) {
+            break; // no need to walk further
+        }
+    }
+    // printf("target size is %d\n", size);
+    if ( !hasContent ) {
+        reason = "target text is empty or only spaces";
+        return false;
+    }
+
+    if ( likelyFootnote ) {
+        if ( reason.empty() ) {
+            reason = "no decision, default to be a footnote";
+        }
+        return true;
+    }
+
+    if ( !reason.empty() ) reason += "; ";
+    reason += "no decision made, default to not a footnote";
+    return false;
+}
+
+
+
+
+
 // Legacy/original CRE block rendering
 int renderBlockElementLegacy( LVRendPageContext & context, ldomNode * enode, int x, int y, int width, int usable_right_overflow )
 {
@@ -7193,6 +7460,8 @@ int BlockFloatFootprint::getTopShiftX(int final_width, bool get_right_shift)
     return shift_x;
 }
 
+ldomXRange curr_footnote_range;
+
 // Enhanced block rendering
 void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int container_width, lUInt32 flags )
 {
@@ -7285,7 +7554,20 @@ void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int 
                 enode->getDocument()->getDocFlag(DOC_FLAG_ENABLE_FOOTNOTES)) {
         enode->getAllInnerAttributeValues(attr_id, footnoteIds);
         if ( footnoteIds.length() > 0 )
+        {
+            lString32 reason;
+            lString32 extendedStopReason;
+            ldomXRange footnote_range;
+
+            _isLinkToFootnote(enode, 0x4000 | 0x8000, INT_MAX, reason, extendedStopReason, footnote_range);
+            if (footnote_range.isNull()) {
+                curr_footnote_range=ldomXRange(enode, true);
+            } else {
+                curr_footnote_range = footnote_range;
+            }
+
             isFootNoteBody = true;
+        }
         // Notes:
         // enterFootNote() takes care of not creating a new footnote if we are already
         // inside a footnotebody (in case of nested "-cr-hint: footnote-inpage"), which
@@ -7293,6 +7575,14 @@ void renderBlockElementEnhanced( FlowState * flow, ldomNode * enode, int x, int 
         // If feels that if there are duplicated id= in the document, and they are
         // involved in footnotes links and targets, things can get messy... No specific
         // attention is currently given to this situation.
+    }
+    if (! curr_footnote_range.isNull()) {
+        if (curr_footnote_range.isInside(ldomXPointerEx(enode, 0))) {
+            isFootNoteBody = true;
+        }
+        else {
+            curr_footnote_range.clear();
+        }
     }
     // For fb2 documents. Description of the <body> element from FictionBook2.2.xsd:
     //   Main content of the book, multiple bodies are used for additional
@@ -11075,6 +11365,12 @@ void setNodeStyle( ldomNode * enode, css_style_ref_t parent_style, LVFontRef par
     if ( !STYLE_HAS_CR_HINT(pstyle, NONE_NO_INHERIT) ) {
         pstyle->cr_hint.value |= (parent_style->cr_hint.value & CSS_CR_HINT_INHERITABLE_MASK);
         pstyle->cr_hint.type = css_val_unspecified;
+    }
+
+    if (! curr_footnote_range.isNull()) {
+        if (curr_footnote_range.isInside(ldomXPointerEx(enode, 0))) {
+            pstyle->cr_hint.value |= CSS_CR_HINT_INSIDE_FOOTNOTE_INPAGE;
+        }
     }
 
     // font-weight

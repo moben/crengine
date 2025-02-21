@@ -138,6 +138,12 @@ void LVRendPageContext::enterFootNote( lString32Collection & ids )
         CRLog::error("Nested entering note" );
         return;
     }
+    if (ids.length() == 0) {
+        ids.clear();
+        ids.addAll(cached_footnote_ids);
+    }
+    cached_footnote_ids.clear();
+    cached_footnote_ids.addAll(ids);
     curr_note = getOrCreateFootNote( ids ).get();
 }
 

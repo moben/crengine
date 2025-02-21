@@ -450,7 +450,7 @@ class LVRendPageContext
                     // document, so we can't accumulate lines from different places: override
                     // its content. (This is consistent with the way crengine handle id= when
                     // building the DOM: later ones override ealier ones).
-                    ref.get()->clear();
+                    // ref.get()->clear();
                 }
                 // Make a non-actual (which may be a proxy or not) actual
                 ref.get()->setIsActual(true);
@@ -475,7 +475,7 @@ class LVRendPageContext
                 found = n;
                 // As above, see comments there.
                 if ( ref.get()->isActual() ) {
-                    ref.get()->clear();
+                    // ref.get()->clear();
                 }
                 ref.get()->setIsActual(true);
                 break;
@@ -546,6 +546,7 @@ public:
     // being called twice and a double free crash)
     lString32Collection * getLinkIds() { return &link_ids; }
 
+    lString32Collection cached_footnote_ids;
     /// mark start of foot note
     void enterFootNote( lString32 id );
     void enterFootNote( lString32Collection & ids );
