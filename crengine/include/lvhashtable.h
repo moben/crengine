@@ -15,6 +15,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <type_traits>
 #include "lvtypes.h"
 
 inline lUInt32 getHash( lUInt16 n )
@@ -58,6 +59,8 @@ public:
         keyT    key;
         valueT  value;
         pair( const keyT & nkey, valueT nvalue, pair * pnext ) : next(pnext), key(nkey), value(nvalue) { }
+        pair(const pair&) = delete;
+        pair& operator=(const pair&) = delete;
     };
 
 	class iterator {
@@ -65,10 +68,10 @@ public:
 		const LVHashTable & _tbl;
 		int index;
 		pair * ptr;
-		iterator & operator = (iterator &) {
-			// no assignment
-			return *this;
-		}
+		// iterator & operator = (iterator &) {
+		// 	// no assignment
+		// 	return *this;
+		// }
 	public:
 		iterator( const LVHashTable & table )
 			: _tbl( table ), index(0), ptr(NULL)
@@ -77,6 +80,12 @@ public:
 		iterator( const iterator & v )
 			: _tbl( v._tbl ), index(v.index), ptr(v.ptr)
 		{
+		}
+		iterator& operator=( const iterator & v )
+		{
+			_tbl = v._tbl;
+			index = v.index;
+			ptr = v.ptr;
 		}
 		pair * next()
 		{
@@ -100,6 +109,55 @@ public:
         _table = new pair* [ size ]();
         _size = size;
         _count = 0;
+    }
+    // These would need to also copy-construct a new value
+    // Can only be allowed if we also own values or we _know_ that other outlives us
+    LVHashTable(const LVHashTable<keyT, valueT, true>& other) = delete;
+    LVHashTable& operator=(const LVHashTable<keyT, valueT, true>& other) = delete;
+    // LVHashTable<keyT, valueT, true>(const LVHashTable& other) = delete;
+    // LVHashTable<keyT, valueT, true>& operator=(const LVHashTable& other) = delete;
+
+    LVHashTable/*<keyT, valueT, false>*/(const LVHashTable<keyT, valueT, false>& other) {
+        _size = other._size;
+        _count = other._count;
+        _table = new pair* [ _size ]();
+
+        for (lUInt32 index = 0; index < _size; ++index) {
+            pair * pn = NULL;
+            for (pair ** op = &other._table[index] ;*op ;op = &(*op)->next )
+            {
+                if constexpr (own_values) {
+                    pn = new pair((*op)->key, new std::remove_pointer_t<valueT>((*op)->value), pn);
+                } else {
+                    pn = new pair((*op)->key, (*op)->value, pn);
+                }
+            }
+            _table[index] = pn;
+        }
+    }
+    LVHashTable/*<keyT, valueT, false>*/& operator=(const LVHashTable<keyT, valueT, false>& other) {
+        if ( _table ) {
+            clear();
+            delete[] _table;
+        }
+
+        _size = other._size;
+        _count = other._count;
+        _table = new pair* [ _size ]();
+
+        for (lUInt32 index = 0; index < _size; ++index) {
+            pair * pn = NULL;
+            for (pair ** op = &other._table[index] ;*op ;op = &(*op)->next )
+            {
+                if constexpr (own_values) {
+                    pn = new pair((*op)->key, new std::remove_pointer_t<valueT>((*op)->value), pn);
+                } else {
+                    pn = new pair((*op)->key, (*op)->value, pn);
+                }
+            }
+            _table[index] = pn;
+        }
+        return *this;
     }
     ~LVHashTable()
     {
