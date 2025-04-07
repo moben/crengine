@@ -3911,6 +3911,86 @@ ldomNode * lxmlDocBase::getRootNode()
     return getTinyNode(17);
 }
 
+// Base impl for footnote detection
+static bool _crengine_isLinkToFootnote(ldomDocument *doc, const ldomXPointerEx sourceXP, const lString32 target_xpointer,
+            const int /*flags*/, const int /*maxTextSize*/, lString32 & /*reason*/,
+            lString32 & /*extendedStopReason*/, ldomXRange & /*extendedRange*/)
+{
+    const ldomXPointerEx targetXP = ldomXPointerEx(doc->createXPointer(target_xpointer));
+    // ldomNode *sourceNode = sourceXP.getNode();
+    ldomNode *targetNode = targetXP.getNode();
+
+    css_style_ref_t targetNodeStyle = targetNode->getStyle();
+    // FIXME or FOOTNOTE_INPAGE? Make those consistent
+    if ( STYLE_HAS_CR_HINT(targetNodeStyle, FOOTNOTE) ) {
+        // Don't have to check for id because we only get called with source being el_a with href and target having that id
+        return true;
+    }
+    // else if ( STYLE_HAS_CR_HINT(targetNodeStyle, FOOTNOTE_IGNORE) ) {
+    //     reason = "target has -cr-hint: footnote-ignore";
+    //     return false;
+    // }
+    return false;
+}
+
+
+class ldomFootnoteCallback : public ldomNodeCallback {
+public:
+    ldomFootnoteCallback() { }
+    /// called for each found text fragment in range
+    virtual void onText(ldomXRange *) { }
+    /// called for each found node in range
+    virtual bool onElement(ldomXPointerEx * ptr) {
+        if (ptr == NULL || ptr->isNull())
+            return true;
+
+        ldomNode * node = ptr->getNode();
+        if ( !node ||  node->getNodeId()!=el_a )
+            return true;
+        ldomDocument * doc = node->getDocument();
+
+        lString32 link = ptr->getHRef();
+        if (link[0] != '#' || link.length() <= 1)
+            return true;
+
+        const ldomXPointerEx targetXP = ldomXPointerEx(ptr->getDocument()->createXPointer(link));
+        ldomNode *targetNode = targetXP.getNode();
+
+        lString32 reason;
+        lString32 extendedStopReason;
+        ldomXRange extendedRange;
+        int flags = 0x0002 + 0x0004 + 0x0008 + 0x0010 + 0x0020 + 0x0040 + 0x0100 + 0x0200 + 0x0400 + 0x0800 + 0x1000 + 0x4000 + 0x8000;
+        if (_crengine_isLinkToFootnote(
+            doc,
+            *ptr,
+            // target,
+            link,
+            flags,
+            10000,
+            reason,
+            extendedStopReason,
+            extendedRange)) {
+            ldomXRange blockrange = ldomXRange(ldomXPointerEx(targetNode, 0).getThisBlockNode(), true);
+
+            // FIXME
+            // It seems lik when the extension is on a different page than the original block, we miss it here for some reason?
+            // Or maybe this was just because style is still buggy on re-load
+            if (! extendedRange.isNull()) {
+                blockrange.setEnd(extendedRange.getEnd());
+            }
+
+            link.erase(0,1);
+            doc->addFootnoteSource(node, link);
+            doc->addFootnoteTarget(link, ldomXPointerEx(targetNode, 0).getThisBlockNode(), extendedRange);
+
+            // need to invalidate cache / doc serialization somehow after this
+            // Otherwise, they aren't marked on load...
+            // Or make footnotes serialized
+        }
+        return true;
+    }
+};
+
 ldomDocument::ldomDocument()
 : lxmlDocBase(DEF_DOC_DATA_BUFFER_SIZE)
 , m_toc(this)
